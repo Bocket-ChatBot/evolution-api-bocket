@@ -1696,6 +1696,11 @@ export class BaileysStartupService extends ChannelStartupService {
                   `Update readed messages duplicated ignored in message.update [avoid deadlock]: ${messageKey}`,
                 );
               }
+            } else if (key.fromMe) {
+              // CUSTOM: bocket-evolution-chatwoot-status-relay
+              if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled) {
+                await this.chatwootService.updateMessageStatus(findMessage, status[update.status]);
+              }
             }
           }
 

@@ -106,6 +106,37 @@ export class ChatwootService {
     };
   }
 
+  // CUSTOM: bocket-evolution-chatwoot-status-relay
+  // Relays outbound WhatsApp delivery/read acks to the Chatwoot message that Evolution
+  // itself created, so the checkmarks in Chatwoot reflect real WhatsApp delivery state.
+  private static readonly CHATWOOT_ACK_STATUS_MAP: Record<string, 'delivered' | 'read'> = {
+    DELIVERY_ACK: 'delivered',
+    READ: 'read',
+    PLAYED: 'read',
+  };
+
+  public async updateMessageStatus(findMessage: any, ackStatus: string) {
+    const cwStatus = ChatwootService.CHATWOOT_ACK_STATUS_MAP[ackStatus];
+
+    if (!cwStatus || !findMessage?.chatwootMessageId || !findMessage?.chatwootConversationId) {
+      return;
+    }
+
+    try {
+      await chatwootRequest(this.getClientCwConfig(), {
+        method: 'PATCH',
+        url: `/api/v1/accounts/${this.provider.accountId}/conversations/${findMessage.chatwootConversationId}/messages/${findMessage.chatwootMessageId}`,
+        body: { status: cwStatus },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `bocket: failed to relay ${ackStatus} status to Chatwoot message ${findMessage.chatwootMessageId}: ${
+          error?.message ?? error
+        }`,
+      );
+    }
+  }
+
   public getCache() {
     return this.cache;
   }
