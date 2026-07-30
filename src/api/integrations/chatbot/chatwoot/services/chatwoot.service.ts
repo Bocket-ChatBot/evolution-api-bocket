@@ -660,11 +660,58 @@ export class ChatwootService {
     return filterPayload;
   }
 
+  // CUSTOM: bocket-lid-phone-fallback
+  // WhatsApp @lid events sometimes arrive with key.remoteJidAlt undefined. Upstream then leaves
+  // phoneNumber undefined and createConversation throws on phoneNumber.split('@'), which silently
+  // drops the inbound message (surfaces in the logs as "conversation not found"). Resolve the real
+  // phone number through the sources we have, in order of reliability.
+  private async resolveLidPhoneNumber(instance: InstanceDto, lid: string): Promise<string | null> {
+    // 1. Baileys keeps a LID <-> PN store on the signal repository.
+    try {
+      const client: any = this.waMonitor.waInstances[instance.instanceName]?.client;
+      const pn = await client?.signalRepository?.lidMapping?.getPNForLID(lid);
+      if (pn) {
+        this.logger.verbose(`bocket: LID resolved via Baileys store: ${lid} -> ${pn}`);
+        return pn;
+      }
+    } catch (error) {
+      this.logger.warn(`bocket: Baileys LID lookup failed for ${lid}: ${error?.message ?? error}`);
+    }
+
+    // 2. Evolution's own IsOnWhatsapp table carries a lid column for numbers it has checked.
+    try {
+      const known = await this.prismaRepository.isOnWhatsapp.findFirst({
+        where: { lid },
+        select: { remoteJid: true },
+      });
+      if (known?.remoteJid) {
+        this.logger.verbose(`bocket: LID resolved via IsOnWhatsapp: ${lid} -> ${known.remoteJid}`);
+        return known.remoteJid;
+      }
+    } catch (error) {
+      this.logger.warn(`bocket: IsOnWhatsapp LID lookup failed for ${lid}: ${error?.message ?? error}`);
+    }
+
+    return null;
+  }
+
   public async createConversation(instance: InstanceDto, body: any) {
     const isLid = body.key.addressingMode === 'lid';
     const isGroup = body.key.remoteJid.endsWith('@g.us');
-    const phoneNumber = isLid && !isGroup ? body.key.remoteJidAlt : body.key.remoteJid;
+    let phoneNumber = isLid && !isGroup ? body.key.remoteJidAlt : body.key.remoteJid;
     const { remoteJid } = body.key;
+
+    // CUSTOM: bocket-lid-phone-fallback
+    // Never let an unresolved @lid drop the message: resolve it if we can, otherwise fall back to
+    // the LID itself so the conversation still reaches Chatwoot. The @lid contact-merge logic
+    // below reconciles the contact as soon as an event carrying remoteJidAlt arrives.
+    if (isLid && !isGroup && !phoneNumber) {
+      phoneNumber = await this.resolveLidPhoneNumber(instance, remoteJid);
+      if (!phoneNumber) {
+        this.logger.warn(`bocket: could not resolve LID ${remoteJid}, falling back to the LID itself`);
+        phoneNumber = remoteJid;
+      }
+    }
     const cacheKey = `${instance.instanceName}:createConversation-${remoteJid}`;
     const lockKey = `${instance.instanceName}:lock:createConversation-${remoteJid}`;
     const maxWaitTime = 5000; // 5 seconds
