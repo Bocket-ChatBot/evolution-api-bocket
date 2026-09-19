@@ -984,10 +984,22 @@ export class ChatwootService {
       return null;
     }
 
-    const findByName = inbox.payload.find((inbox) => inbox.name === this.getClientCwConfig().nameInbox);
+    const configuredName = this.getClientCwConfig().nameInbox;
+    const findByName = inbox.payload.find((inbox) => inbox.name === configuredName);
 
     if (!findByName) {
-      this.logger.warn('inbox not found');
+      // CUSTOM: bocket-inbox-name-mismatch-visibility
+      // A silent 'inbox not found' here means EVERY message for this instance is dropped before
+      // ever reaching Chatwoot (no contact, no conversation, no trace) - e.g. someone renamed the
+      // inbox in Chatwoot, or its name got corrupted (mojibake/encoding) and no longer matches the
+      // nameInbox stored for this instance byte-for-byte. Log loudly with the actual available
+      // names so this is diagnosable from logs alone, instead of requiring a manual DB/API dive.
+      this.logger.error(
+        `bocket: Chatwoot inbox "${configuredName}" not found for instance ${instance.instanceName} ` +
+          `(accountId ${this.provider?.accountId}). All inbound/outbound messages for this instance ` +
+          `will silently fail to sync to Chatwoot until this is fixed. Available inbox names: ` +
+          `${inbox.payload.map((i) => i.name).join(' | ')}`,
+      );
       return null;
     }
 
